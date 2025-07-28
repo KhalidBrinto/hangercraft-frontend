@@ -13,23 +13,32 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { AreaChart, Area, CartesianGrid, XAxis, Tooltip, ResponsiveContainer } from "recharts"
-import { useState } from "react"
-import { Percent, CheckCircle, XCircle, Gift, ArrowUpRight, ArrowDownRight } from "lucide-react"
+import { useState, useEffect } from "react"
+import { useDebounce } from "@/hooks/use-debounce"
+import { Percent, CheckCircle, XCircle, Gift, ArrowUpRight, ArrowDownRight, Search, Plus } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog"
 import { useRef } from "react"
+import { discountAPI } from "@/lib/api"
 
-// Sample discounts/coupons data
-const coupons = [
-  { code: "SUMMER20", type: "Percentage", value: 20, status: "Active", usage: 120, start: "2024-06-01", end: "2024-06-30" },
-  { code: "WELCOME10", type: "Flat", value: 10, status: "Active", usage: 200, start: "2024-05-01", end: "2024-12-31" },
-  { code: "FREESHIP", type: "Free Shipping", value: 0, status: "Expired", usage: 80, start: "2024-04-01", end: "2024-05-01" },
-  { code: "WINTER15", type: "Percentage", value: 15, status: "Active", usage: 60, start: "2024-12-01", end: "2024-12-31" },
-  { code: "VIP50", type: "Flat", value: 50, status: "Expired", usage: 30, start: "2024-01-01", end: "2024-03-01" },
-]
+type Discount = {
+  _id: string;
+  code: string;
+  type: 'percentage' | 'flat' | 'free_shipping';
+  value: number;
+  description: string;
+  maxUsage: number;
+  currentUsage: number;
+  startDate: string;
+  endDate: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
 
 const statusColors: Record<string, string> = {
-  Active: "bg-green-100 text-green-800",
-  Expired: "bg-red-100 text-red-800",
+  active: "bg-green-100 text-green-800",
+  expired: "bg-red-100 text-red-800",
+  inactive: "bg-gray-100 text-gray-800",
 }
 
 const chartData = [
@@ -43,31 +52,80 @@ const chartData = [
 ]
 
 export default function DiscountsCouponsPage() {
+  const [discounts, setDiscounts] = useState<Discount[]>([])
   const [search, setSearch] = useState("")
+  const [isSearching, setIsSearching] = useState(false)
+  const debouncedSearchTerm = useDebounce(search, 300)
   const [statusFilter, setStatusFilter] = useState("all")
   const [open, setOpen] = useState(false)
-  const [allCoupons, setAllCoupons] = useState(coupons)
+  const [isLoading, setIsLoading] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [form, setForm] = useState({
     code: "",
-    type: "Percentage",
+    type: "percentage" as 'percentage' | 'flat' | 'free_shipping',
     value: "",
-    status: "Active",
+    description: "",
+    maxUsage: "",
+    maxUsagePerCustomer: "1",
+    minimumOrderAmount: "",
+    maximumDiscountAmount: "",
+    isActive: true,
     start: "",
     end: "",
   })
   const formRef = useRef<HTMLFormElement>(null)
 
-  const filteredCoupons = allCoupons.filter(coupon =>
-    (coupon.code.toLowerCase().includes(search.toLowerCase())) &&
-    (statusFilter !== "all" ? coupon.status === statusFilter : true)
-  )
+  // Real-time search effect
+  useEffect(() => {
+    if (debouncedSearchTerm) {
+      setIsSearching(true)
+      searchDiscounts(debouncedSearchTerm)
+    } else {
+      fetchAllDiscounts()
+    }
+  }, [debouncedSearchTerm])
+
+  // Fetch discounts on component mount
+  useEffect(() => {
+    fetchAllDiscounts()
+  }, [])
+
+  const searchDiscounts = async (term: string) => {
+    // Since the API doesn't support search, we'll use client-side filtering
+    setIsSearching(false)
+    // The filtering is already handled in filteredDiscounts
+  }
+
+  const fetchAllDiscounts = async () => {
+    setIsLoading(true)
+    const result = await discountAPI.getAll()
+    setIsLoading(false)
+    if (result.success && Array.isArray(result.data)) {
+      setDiscounts(result.data)
+    }
+  }
+
+  const getDiscountStatus = (discount: Discount) => {
+    const now = new Date()
+    const endDate = new Date(discount.endDate)
+    if (!discount.isActive) return 'inactive'
+    if (now > endDate) return 'expired'
+    return 'active'
+  }
+
+  const filteredDiscounts = discounts.filter(discount => {
+    const matchesSearch = discount.code.toLowerCase().includes(search.toLowerCase()) ||
+                         discount.description.toLowerCase().includes(search.toLowerCase())
+    const matchesStatus = statusFilter === "all" || getDiscountStatus(discount) === statusFilter
+    return matchesSearch && matchesStatus
+  })
 
   // Insights
-  const totalCoupons = allCoupons.length
-  const active = allCoupons.filter(c => c.status === "Active").length
-  const expired = allCoupons.filter(c => c.status === "Expired").length
-  const usage = allCoupons.reduce((sum, c) => sum + c.usage, 0)
-  const usageRate = ((usage / (totalCoupons * 100)) * 100).toFixed(1) // fake rate
+  const totalDiscounts = discounts.length
+  const active = discounts.filter(d => getDiscountStatus(d) === "active").length
+  const expired = discounts.filter(d => getDiscountStatus(d) === "expired").length
+  const totalUsage = discounts.reduce((sum, d) => sum + d.currentUsage, 0)
+  const usageRate = totalDiscounts > 0 ? ((totalUsage / (totalDiscounts * 100)) * 100).toFixed(1) : "0"
 
   function handleFormChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
     setForm({ ...form, [e.target.name]: e.target.value })
@@ -76,27 +134,51 @@ export default function DiscountsCouponsPage() {
   function handleDialogOpenChange(val: boolean) {
     setOpen(val)
     if (!val) {
-      setForm({ code: "", type: "Percentage", value: "", status: "Active", start: "", end: "" })
+      setForm({ 
+        code: "", 
+        type: "percentage", 
+        value: "", 
+        description: "",
+        maxUsage: "",
+        maxUsagePerCustomer: "1",
+        minimumOrderAmount: "",
+        maximumDiscountAmount: "",
+        isActive: true,
+        start: "", 
+        end: "" 
+      })
       formRef.current?.reset()
     }
   }
 
-  function handleAddCoupon(e: React.FormEvent) {
+  async function handleAddDiscount(e: React.FormEvent) {
     e.preventDefault()
-    if (!form.code || !form.value || !form.start || !form.end) return
-    setAllCoupons([
-      ...allCoupons,
-      {
-        code: form.code,
-        type: form.type,
-        value: form.type === "Percentage" ? Number(form.value) : form.type === "Flat" ? Number(form.value) : 0,
-        status: form.status,
-        usage: 0,
-        start: form.start,
-        end: form.end,
-      },
-    ])
-    setOpen(false)
+    if (!form.code || !form.value || !form.start || !form.end || !form.description || !form.maxUsage) return
+    
+    setIsSubmitting(true)
+    const discountData = {
+      code: form.code,
+      type: form.type,
+      value: parseFloat(form.value),
+      description: form.description,
+      maxUsage: parseInt(form.maxUsage),
+      maxUsagePerCustomer: parseInt(form.maxUsagePerCustomer),
+      minimumOrderAmount: form.minimumOrderAmount ? parseFloat(form.minimumOrderAmount) : undefined,
+      maximumDiscountAmount: form.maximumDiscountAmount ? parseFloat(form.maximumDiscountAmount) : undefined,
+      isActive: form.isActive,
+      startDate: new Date(form.start),
+      endDate: new Date(form.end),
+    }
+    
+    const result = await discountAPI.create(discountData)
+    setIsSubmitting(false)
+    
+    if (result.success) {
+      setOpen(false)
+      fetchAllDiscounts() // Refresh the list
+    } else {
+      alert(result.error || 'Failed to create discount')
+    }
   }
 
   return (
@@ -131,7 +213,7 @@ export default function DiscountsCouponsPage() {
                 <Card>
                   <CardHeader>
                     <CardDescription>Total Coupons</CardDescription>
-                    <CardTitle className="text-2xl font-semibold">{totalCoupons}</CardTitle>
+                    <CardTitle className="text-2xl font-semibold">{totalDiscounts}</CardTitle>
                     <Badge className="bg-blue-100 text-blue-800 mt-2"><Gift className="w-4 h-4 mr-1" />+5% MoM</Badge>
                   </CardHeader>
                 </Card>
@@ -180,7 +262,7 @@ export default function DiscountsCouponsPage() {
                     <DialogHeader>
                       <DialogTitle>Add Discount/Coupon</DialogTitle>
                     </DialogHeader>
-                    <form ref={formRef} onSubmit={handleAddCoupon} className="space-y-4">
+                    <form ref={formRef} onSubmit={handleAddDiscount} className="space-y-4">
                       <div>
                         <label className="block text-sm font-medium mb-1">Code</label>
                         <Input name="code" value={form.code} onChange={handleFormChange} required autoFocus />
@@ -188,22 +270,42 @@ export default function DiscountsCouponsPage() {
                       <div>
                         <label className="block text-sm font-medium mb-1">Type</label>
                         <select name="type" value={form.type} onChange={handleFormChange} className="w-full border rounded px-2 py-2">
-                          <option value="Percentage">Percentage</option>
-                          <option value="Flat">Flat</option>
-                          <option value="Free Shipping">Free Shipping</option>
+                          <option value="percentage">Percentage</option>
+                          <option value="flat">Flat</option>
+                          <option value="free_shipping">Free Shipping</option>
                         </select>
                       </div>
-                      {form.type !== "Free Shipping" && (
+                      {form.type !== "free_shipping" && (
                         <div>
-                          <label className="block text-sm font-medium mb-1">Value {form.type === "Percentage" ? "(%)" : "($)"}</label>
+                          <label className="block text-sm font-medium mb-1">Value {form.type === "percentage" ? "(%)" : "($)"}</label>
                           <Input name="value" type="number" value={form.value} onChange={handleFormChange} required min={1} />
                         </div>
                       )}
                       <div>
+                        <label className="block text-sm font-medium mb-1">Description</label>
+                        <Input name="description" value={form.description} onChange={handleFormChange} />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Max Usage</label>
+                        <Input name="maxUsage" type="number" value={form.maxUsage} onChange={handleFormChange} required min={1} />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Max Usage Per Customer</label>
+                        <Input name="maxUsagePerCustomer" type="number" value={form.maxUsagePerCustomer} onChange={handleFormChange} required min={1} />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Minimum Order Amount</label>
+                        <Input name="minimumOrderAmount" type="number" value={form.minimumOrderAmount} onChange={handleFormChange} />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Maximum Discount Amount</label>
+                        <Input name="maximumDiscountAmount" type="number" value={form.maximumDiscountAmount} onChange={handleFormChange} />
+                      </div>
+                      <div>
                         <label className="block text-sm font-medium mb-1">Status</label>
-                        <select name="status" value={form.status} onChange={handleFormChange} className="w-full border rounded px-2 py-2">
-                          <option value="Active">Active</option>
-                          <option value="Expired">Expired</option>
+                        <select name="isActive" value={form.isActive ? "true" : "false"} onChange={handleFormChange} className="w-full border rounded px-2 py-2">
+                          <option value="true">Active</option>
+                          <option value="false">Inactive</option>
                         </select>
                       </div>
                       <div className="flex gap-2">
@@ -217,7 +319,9 @@ export default function DiscountsCouponsPage() {
                         </div>
                       </div>
                       <DialogFooter>
-                        <Button type="submit">Add</Button>
+                        <Button type="submit" disabled={isSubmitting}>
+                          {isSubmitting ? "Adding..." : "Add"}
+                        </Button>
                       </DialogFooter>
                     </form>
                   </DialogContent>
@@ -227,25 +331,42 @@ export default function DiscountsCouponsPage() {
               {/* Coupons Table */}
               <Card className="mx-4 lg:mx-6">
                 <CardHeader>
-                  <CardTitle>Discounts & Coupons</CardTitle>
+                  <CardTitle>
+                    Discounts & Coupons
+                    {search && (
+                      <span className="text-sm font-normal text-muted-foreground ml-2">
+                        ({filteredDiscounts.length} results for &quot;{search}&quot;)
+                      </span>
+                    )}
+                  </CardTitle>
                   <CardDescription>Manage and track all discounts and coupons</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="flex flex-col md:flex-row gap-4 mb-4">
-                    <Input
-                      placeholder="Search by code..."
-                      value={search}
-                      onChange={e => setSearch(e.target.value)}
-                      className="md:w-1/3"
-                    />
+                    <div className="relative md:w-1/3">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
+                      <Input
+                        placeholder="Search by code or description..."
+                        value={search}
+                        onChange={e => setSearch(e.target.value)}
+                        className="pl-10"
+                        disabled={isSearching}
+                      />
+                      {isSearching && (
+                        <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+                        </div>
+                      )}
+                    </div>
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
                       <SelectTrigger className="md:w-48">
                         <SelectValue placeholder="Filter by status" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">All Statuses</SelectItem>
-                        <SelectItem value="Active">Active</SelectItem>
-                        <SelectItem value="Expired">Expired</SelectItem>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="expired">Expired</SelectItem>
+                        <SelectItem value="inactive">Inactive</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -264,24 +385,24 @@ export default function DiscountsCouponsPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {filteredCoupons.length === 0 ? (
+                        {filteredDiscounts.length === 0 ? (
                           <TableRow>
                             <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                               No discounts or coupons found.
                             </TableCell>
                           </TableRow>
                         ) : (
-                          filteredCoupons.map(coupon => (
-                            <TableRow key={coupon.code}>
-                              <TableCell>{coupon.code}</TableCell>
-                              <TableCell>{coupon.type}</TableCell>
-                              <TableCell>{coupon.type === "Percentage" ? `${coupon.value}%` : coupon.type === "Flat" ? `$${coupon.value}` : coupon.type}</TableCell>
+                          filteredDiscounts.map(discount => (
+                            <TableRow key={discount._id}>
+                              <TableCell>{discount.code}</TableCell>
+                              <TableCell>{discount.type === 'percentage' ? 'Percentage' : discount.type === 'flat' ? 'Flat' : 'Free Shipping'}</TableCell>
+                              <TableCell>{discount.type === 'percentage' ? `${discount.value}%` : discount.type === 'flat' ? `$${discount.value}` : discount.type}</TableCell>
                               <TableCell>
-                                <Badge className={statusColors[coupon.status] + " font-medium"}>{coupon.status}</Badge>
+                                <Badge className={statusColors[getDiscountStatus(discount)] + " font-medium"}>{getDiscountStatus(discount).charAt(0).toUpperCase() + getDiscountStatus(discount).slice(1)}</Badge>
                               </TableCell>
-                              <TableCell>{coupon.usage}</TableCell>
-                              <TableCell>{coupon.start}</TableCell>
-                              <TableCell>{coupon.end}</TableCell>
+                              <TableCell>{discount.currentUsage}</TableCell>
+                              <TableCell>{new Date(discount.startDate).toLocaleDateString()}</TableCell>
+                              <TableCell>{new Date(discount.endDate).toLocaleDateString()}</TableCell>
                               <TableCell className="text-right">
                                 <Button size="sm" variant="outline">View</Button>
                               </TableCell>

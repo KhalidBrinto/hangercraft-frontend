@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useDebounce } from "@/hooks/use-debounce"
 import { Plus, Search, Edit, Trash2, Eye, Upload, X, Palette, Ruler, Tag, Globe, Truck, AlertTriangle, DollarSign, Package, EyeOff, Calendar, PaintBucket } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -104,63 +105,7 @@ const shippingMethods = [
 ]
 
 // Sample product data
-const sampleProducts = [
-  {
-    id: 1,
-    name: "Classic White T-Shirt",
-    category: "Clothing",
-    subcategory: "T-Shirts",
-    price: 29.99,
-    stock: 150,
-    status: "In Stock",
-    image: "/assets/tshirt.jpg",
-    hasVariations: false
-  },
-  {
-    id: 2,
-    name: "Denim Jeans",
-    category: "Clothing",
-    subcategory: "Jeans",
-    price: 79.99,
-    stock: 45,
-    status: "Low Stock",
-    image: "/assets/jeans.jpg",
-    hasVariations: true
-  },
-  {
-    id: 3,
-    name: "Leather Jacket",
-    category: "Clothing",
-    subcategory: "Jackets",
-    price: 199.99,
-    stock: 0,
-    status: "Out of Stock",
-    image: "/assets/jacket.jpg",
-    hasVariations: false
-  },
-  {
-    id: 4,
-    name: "Running Shoes",
-    category: "Footwear",
-    subcategory: "Sneakers",
-    price: 89.99,
-    stock: 78,
-    status: "In Stock",
-    image: "/assets/shoes.jpg",
-    hasVariations: true
-  },
-  {
-    id: 5,
-    name: "Backpack",
-    category: "Accessories",
-    subcategory: "Bags",
-    price: 49.99,
-    stock: 32,
-    status: "Low Stock",
-    image: "/assets/backpack.jpg",
-    hasVariations: false
-  }
-]
+
 
 type Product = {
   _id: string;
@@ -179,6 +124,8 @@ type Product = {
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [searchTerm, setSearchTerm] = useState("")
+  const [isSearching, setIsSearching] = useState(false)
+  const debouncedSearchTerm = useDebounce(searchTerm, 300) // 300ms delay
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
   
@@ -195,13 +142,13 @@ export default function ProductsPage() {
   const [hasVariations, setHasVariations] = useState(false)
   const [selectedColors, setSelectedColors] = useState<string[]>([])
   const [selectedSizes, setSelectedSizes] = useState<string[]>([])
+  const [colorImages, setColorImages] = useState<Record<string, string[]>>({})
   const [variations, setVariations] = useState<Array<{
     id: string;
     color: { _id: string; name: string; hexCode: string };
     size: { _id: string; name: string };
     stock: number;
     price: number;
-    images: string[];
   }>>([])
   const [productImages, setProductImages] = useState<string[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -244,10 +191,31 @@ export default function ProductsPage() {
   const [attributeSizeName, setAttributeSizeName] = useState("")
   const [attributeLoading, setAttributeLoading] = useState(false)
 
-  const filteredProducts = products.filter(product =>
-    product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (product.category?.toLowerCase() || '').includes(searchTerm.toLowerCase())
-  )
+  // Real-time search effect
+  useEffect(() => {
+    if (debouncedSearchTerm) {
+      setIsSearching(true)
+      searchProducts(debouncedSearchTerm)
+    } else {
+      // If search is empty, load all products
+      fetchAllProducts()
+    }
+  }, [debouncedSearchTerm])
+
+  const searchProducts = async (term: string) => {
+    const result = await productAPI.getAll({ search: term })
+    setIsSearching(false)
+    if (result.success && Array.isArray(result.data)) {
+      setProducts(result.data)
+    }
+  }
+
+  const fetchAllProducts = async () => {
+    const result = await productAPI.getAll()
+    if (result.success && Array.isArray(result.data)) {
+      setProducts(result.data)
+    }
+  }
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -275,13 +243,7 @@ export default function ProductsPage() {
 
   // Fetch products from API
   useEffect(() => {
-    async function fetchProducts() {
-      const result = await productAPI.getAll()
-      if (result.success && Array.isArray(result.data)) {
-        setProducts(result.data)
-      }
-    }
-    fetchProducts()
+    fetchAllProducts()
   }, [])
 
   // Fetch attributes from API
@@ -349,7 +311,6 @@ export default function ProductsPage() {
       size: { _id: string; name: string };
       stock: number;
       price: number;
-      images: string[];
     }> = []
     
     for (const colorId of selectedColors) {
@@ -363,7 +324,6 @@ export default function ProductsPage() {
             size: size,
             stock: 0,
             price: 0,
-            images: []
           })
         }
       }
@@ -381,20 +341,22 @@ export default function ProductsPage() {
         uploadedUrls.push(result.url)
       }
     }
-    setVariations(prev => prev.map(v => 
-      v.id === variationId 
-        ? { ...v, images: [...v.images, ...uploadedUrls] }
-        : v
-    ))
+    // Extract color ID from variation ID (format: "colorId-sizeId")
+    const colorId = variationId.split('-')[0]
+    setColorImages(prev => ({
+      ...prev,
+      [colorId]: [...(prev[colorId] || []), ...uploadedUrls]
+    }))
     setImageUploadLoading(false)
   }
 
   const removeVariationImage = (variationId: string, imageIndex: number) => {
-    setVariations(prev => prev.map(v => 
-      v.id === variationId 
-        ? { ...v, images: v.images.filter((_, i) => i !== imageIndex) }
-        : v
-    ))
+    // Extract color ID from variation ID (format: "colorId-sizeId")
+    const colorId = variationId.split('-')[0]
+    setColorImages(prev => ({
+      ...prev,
+      [colorId]: (prev[colorId] || []).filter((_, i) => i !== imageIndex)
+    }))
   }
 
   const updateVariation = (variationId: string, field: string, value: string | number) => {
@@ -795,9 +757,13 @@ export default function ProductsPage() {
                                               />
                                             </div>
                                             <div className="space-y-1">
-                                              <Label className="text-xs">Images</Label>
+                                              <Label className="text-xs">
+                                                {variations.findIndex(v => v.color._id === variation.color._id) === variations.findIndex(v => v.id === variation.id) 
+                                                  ? "Images (shared for all sizes of this color)" 
+                                                  : "Images (shared with other sizes)"}
+                                              </Label>
                                               <div className="flex gap-1">
-                                                {variation.images.map((image, index) => (
+                                                {(colorImages[variation.color._id] || []).map((image: string, index: number) => (
                                                   <div key={index} className="relative">
                                                     <img
                                                       src={image}
@@ -812,15 +778,17 @@ export default function ProductsPage() {
                                                     </button>
                                                   </div>
                                                 ))}
-                                                <label className="w-8 h-8 border-2 border-dashed border-gray-300 rounded flex items-center justify-center cursor-pointer hover:border-gray-400 transition-colors">
-                                                  <Upload className="h-3 w-3 text-gray-400" />
-                                                  <input
-                                                    type="file"
-                                                    accept="image/*"
-                                                    onChange={(e) => handleVariationImageUpload(variation.id, e)}
-                                                    className="hidden"
-                                                  />
-                                                </label>
+                                                {variations.findIndex(v => v.color._id === variation.color._id) === variations.findIndex(v => v.id === variation.id) && (
+                                                  <label className="w-8 h-8 border-2 border-dashed border-gray-300 rounded flex items-center justify-center cursor-pointer hover:border-gray-400 transition-colors">
+                                                    <Upload className="h-3 w-3 text-gray-400" />
+                                                    <input
+                                                      type="file"
+                                                      accept="image/*"
+                                                      onChange={(e) => handleVariationImageUpload(variation.id, e)}
+                                                      className="hidden"
+                                                    />
+                                                  </label>
+                                                )}
                                               </div>
                                             </div>
                                           </div>
@@ -1308,7 +1276,13 @@ export default function ProductsPage() {
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         className="pl-10"
+                        disabled={isSearching}
                       />
+                      {isSearching && (
+                        <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+                        </div>
+                      )}
                     </div>
                     <Button variant="outline">Filters</Button>
                   </div>
@@ -1318,7 +1292,14 @@ export default function ProductsPage() {
               {/* Products Table */}
               <Card className="mx-4 lg:mx-6">
                 <CardHeader>
-                  <CardTitle>Product Inventory</CardTitle>
+                  <CardTitle>
+                    Product Inventory
+                    {searchTerm && (
+                      <span className="text-sm font-normal text-muted-foreground ml-2">
+                        ({products.length} results for &quot;{searchTerm}&quot;)
+                      </span>
+                    )}
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <Table>
@@ -1334,7 +1315,7 @@ export default function ProductsPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredProducts.map((product) => (
+                      {products.map((product) => (
                         <TableRow key={product._id}>
                           <TableCell>
                             <div className="flex items-center gap-3">

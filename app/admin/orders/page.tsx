@@ -13,32 +13,46 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { AreaChart, Area, CartesianGrid, XAxis, Tooltip, ResponsiveContainer } from "recharts"
-import { useState } from "react"
-import { Calendar, CheckCircle, Clock, Truck, XCircle, ArrowUpRight, ArrowDownRight } from "lucide-react"
+import { useState, useEffect } from "react"
+import { useDebounce } from "@/hooks/use-debounce"
+import { Calendar, CheckCircle, Clock, Truck, XCircle, ArrowUpRight, ArrowDownRight, Search, Edit } from "lucide-react"
+import { orderAPI } from "@/lib/api"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog"
 
-// Sample order data
-const orders = [
-  { id: "ORD-1001", customer: "Alice Smith", date: "2024-06-01", status: "Delivered", total: 120.5, payment: "Paid", items: 3 },
-  { id: "ORD-1002", customer: "Bob Johnson", date: "2024-06-02", status: "Pending", total: 89.99, payment: "Pending", items: 2 },
-  { id: "ORD-1003", customer: "Charlie Lee", date: "2024-06-03", status: "Shipped", total: 45.0, payment: "Paid", items: 1 },
-  { id: "ORD-1004", customer: "Diana King", date: "2024-06-04", status: "Cancelled", total: 60.0, payment: "Refunded", items: 2 },
-  { id: "ORD-1005", customer: "Ethan Brown", date: "2024-06-05", status: "Delivered", total: 210.0, payment: "Paid", items: 5 },
-  { id: "ORD-1006", customer: "Fiona White", date: "2024-06-06", status: "Shipped", total: 75.5, payment: "Paid", items: 2 },
-  { id: "ORD-1007", customer: "George Black", date: "2024-06-07", status: "Pending", total: 99.99, payment: "Pending", items: 1 },
-  { id: "ORD-1008", customer: "Hannah Green", date: "2024-06-08", status: "Delivered", total: 150.0, payment: "Paid", items: 4 },
-]
+type Order = {
+  _id: string;
+  orderNumber: string;
+  customer: {
+    name: string;
+    email: string;
+    phone?: string;
+  };
+  items: Array<{
+    name: string;
+    quantity: number;
+    price: number;
+  }>;
+  total: number;
+  status: 'pending' | 'confirmed' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
+  paymentStatus: 'pending' | 'paid' | 'failed' | 'refunded';
+  createdAt: string;
+  updatedAt: string;
+};
 
 const orderStatusColors: Record<string, string> = {
-  Delivered: "bg-green-100 text-green-800",
-  Shipped: "bg-blue-100 text-blue-800",
-  Pending: "bg-yellow-100 text-yellow-800",
-  Cancelled: "bg-red-100 text-red-800",
+  delivered: "bg-green-100 text-green-800",
+  shipped: "bg-blue-100 text-blue-800",
+  processing: "bg-purple-100 text-purple-800",
+  confirmed: "bg-orange-100 text-orange-800",
+  pending: "bg-yellow-100 text-yellow-800",
+  cancelled: "bg-red-100 text-red-800",
 }
 
 const paymentStatusColors: Record<string, string> = {
-  Paid: "bg-green-100 text-green-800",
-  Pending: "bg-yellow-100 text-yellow-800",
-  Refunded: "bg-red-100 text-red-800",
+  paid: "bg-green-100 text-green-800",
+  pending: "bg-yellow-100 text-yellow-800",
+  failed: "bg-red-100 text-red-800",
+  refunded: "bg-gray-100 text-gray-800",
 }
 
 const chartData = [
@@ -52,22 +66,78 @@ const chartData = [
 ]
 
 export default function OrdersPage() {
+  const [orders, setOrders] = useState<Order[]>([])
   const [search, setSearch] = useState("")
+  const [isSearching, setIsSearching] = useState(false)
+  const debouncedSearchTerm = useDebounce(search, 300)
   const [statusFilter, setStatusFilter] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [isUpdating, setIsUpdating] = useState(false)
+  const [newStatus, setNewStatus] = useState("")
 
-  const filteredOrders = orders.filter(order =>
-    (order.customer.toLowerCase().includes(search.toLowerCase()) || order.id.toLowerCase().includes(search.toLowerCase())) &&
-    (statusFilter && statusFilter !== "all" ? order.status === statusFilter : true)
-  )
+  // Real-time search effect
+  useEffect(() => {
+    if (debouncedSearchTerm) {
+      setIsSearching(true)
+      searchOrders(debouncedSearchTerm)
+    } else {
+      fetchAllOrders()
+    }
+  }, [debouncedSearchTerm])
+
+  // Fetch orders on component mount
+  useEffect(() => {
+    fetchAllOrders()
+  }, [])
+
+  const searchOrders = async (term: string) => {
+    // Since the API doesn't support search, we'll use client-side filtering
+    setIsSearching(false)
+    // The filtering is already handled in filteredOrders
+  }
+
+  const fetchAllOrders = async () => {
+    setIsLoading(true)
+    const result = await orderAPI.getAll()
+    setIsLoading(false)
+    if (result.success && Array.isArray(result.data)) {
+      setOrders(result.data)
+    }
+  }
+
+  const handleStatusUpdate = async () => {
+    if (!editingOrder || !newStatus) return
+    
+    setIsUpdating(true)
+    const result = await orderAPI.update(editingOrder._id, { status: newStatus })
+    setIsUpdating(false)
+    
+    if (result.success) {
+      setEditingOrder(null)
+      setNewStatus("")
+      fetchAllOrders() // Refresh the list
+    } else {
+      alert(result.error || 'Failed to update order status')
+    }
+  }
+
+  const filteredOrders = orders.filter(order => {
+    const matchesSearch = order.customer.name.toLowerCase().includes(search.toLowerCase()) ||
+                         order.orderNumber.toLowerCase().includes(search.toLowerCase()) ||
+                         order.customer.email.toLowerCase().includes(search.toLowerCase())
+    const matchesStatus = statusFilter === "" || statusFilter === "all" || order.status === statusFilter
+    return matchesSearch && matchesStatus
+  })
 
   // Insights
   const totalOrders = orders.length
-  const delivered = orders.filter(o => o.status === "Delivered").length
-  const pending = orders.filter(o => o.status === "Pending").length
-  const shipped = orders.filter(o => o.status === "Shipped").length
-  const cancelled = orders.filter(o => o.status === "Cancelled").length
+  const delivered = orders.filter(o => o.status === "delivered").length
+  const pending = orders.filter(o => o.status === "pending").length
+  const shipped = orders.filter(o => o.status === "shipped").length
+  const cancelled = orders.filter(o => o.status === "cancelled").length
   const revenue = orders.reduce((sum, o) => sum + o.total, 0)
-  const avgOrderValue = (revenue / totalOrders).toFixed(2)
+  const avgOrderValue = totalOrders > 0 ? (revenue / totalOrders).toFixed(2) : "0"
 
   return (
     <SidebarProvider
@@ -153,27 +223,45 @@ export default function OrdersPage() {
               {/* Orders Table */}
               <Card className="mx-4 lg:mx-6">
                 <CardHeader>
-                  <CardTitle>Orders</CardTitle>
+                  <CardTitle>
+                    Orders
+                    {search && (
+                      <span className="text-sm font-normal text-muted-foreground ml-2">
+                        ({filteredOrders.length} results for &quot;{search}&quot;)
+                      </span>
+                    )}
+                  </CardTitle>
                   <CardDescription>Manage and track all orders</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="flex flex-col md:flex-row gap-4 mb-4">
-                    <Input
-                      placeholder="Search by customer or order ID..."
-                      value={search}
-                      onChange={e => setSearch(e.target.value)}
-                      className="md:w-1/3"
-                    />
+                    <div className="relative md:w-1/3">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
+                      <Input
+                        placeholder="Search by customer, order ID, or email..."
+                        value={search}
+                        onChange={e => setSearch(e.target.value)}
+                        className="pl-10"
+                        disabled={isSearching}
+                      />
+                      {isSearching && (
+                        <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+                        </div>
+                      )}
+                    </div>
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
                       <SelectTrigger className="md:w-48">
                         <SelectValue placeholder="Filter by status" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">All Statuses</SelectItem>
-                        <SelectItem value="Delivered">Delivered</SelectItem>
-                        <SelectItem value="Shipped">Shipped</SelectItem>
-                        <SelectItem value="Pending">Pending</SelectItem>
-                        <SelectItem value="Cancelled">Cancelled</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="confirmed">Confirmed</SelectItem>
+                        <SelectItem value="processing">Processing</SelectItem>
+                        <SelectItem value="shipped">Shipped</SelectItem>
+                        <SelectItem value="delivered">Delivered</SelectItem>
+                        <SelectItem value="cancelled">Cancelled</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -200,20 +288,59 @@ export default function OrdersPage() {
                           </TableRow>
                         ) : (
                           filteredOrders.map(order => (
-                            <TableRow key={order.id}>
-                              <TableCell>{order.id}</TableCell>
-                              <TableCell>{order.customer}</TableCell>
-                              <TableCell>{order.date}</TableCell>
+                            <TableRow key={order._id}>
+                              <TableCell>{order.orderNumber}</TableCell>
+                              <TableCell>{order.customer.name}</TableCell>
+                              <TableCell>{new Date(order.createdAt).toLocaleDateString()}</TableCell>
                               <TableCell>
                                 <Badge className={orderStatusColors[order.status] + " font-medium"}>{order.status}</Badge>
                               </TableCell>
                               <TableCell>
-                                <Badge className={paymentStatusColors[order.payment] + " font-medium"}>{order.payment}</Badge>
+                                <Badge className={paymentStatusColors[order.paymentStatus] + " font-medium"}>{order.paymentStatus}</Badge>
                               </TableCell>
-                              <TableCell>{order.items}</TableCell>
+                              <TableCell>{order.items.length}</TableCell>
                               <TableCell>${order.total.toFixed(2)}</TableCell>
                               <TableCell className="text-right">
-                                <Button size="sm" variant="outline">View</Button>
+                                <Dialog>
+                                  <DialogTrigger asChild>
+                                    <Button size="sm" variant="outline" onClick={() => {
+                                      setEditingOrder(order)
+                                      setNewStatus(order.status)
+                                    }}>
+                                      <Edit className="w-4 h-4 mr-1" />
+                                      Update Status
+                                    </Button>
+                                  </DialogTrigger>
+                                  <DialogContent>
+                                    <DialogHeader>
+                                      <DialogTitle>Update Order Status for {order.orderNumber}</DialogTitle>
+                                    </DialogHeader>
+                                    <div className="grid gap-4 py-4">
+                                      <Select onValueChange={(value) => setNewStatus(value)} value={newStatus}>
+                                        <SelectTrigger>
+                                          <SelectValue placeholder="Select new status" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="pending">Pending</SelectItem>
+                                          <SelectItem value="confirmed">Confirmed</SelectItem>
+                                          <SelectItem value="processing">Processing</SelectItem>
+                                          <SelectItem value="shipped">Shipped</SelectItem>
+                                          <SelectItem value="delivered">Delivered</SelectItem>
+                                          <SelectItem value="cancelled">Cancelled</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                    <DialogFooter>
+                                      <Button variant="outline" onClick={() => {
+                                        setEditingOrder(null)
+                                        setNewStatus("")
+                                      }}>Cancel</Button>
+                                      <Button onClick={handleStatusUpdate} disabled={isUpdating}>
+                                        {isUpdating ? "Updating..." : "Update Status"}
+                                      </Button>
+                                    </DialogFooter>
+                                  </DialogContent>
+                                </Dialog>
                               </TableCell>
                             </TableRow>
                           ))
